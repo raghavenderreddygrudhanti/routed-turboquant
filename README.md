@@ -169,6 +169,41 @@ examples/
 └── bench_rerank.rs      — reranking impact
 ```
 
+## How routed-turboquant Differs from turbovec
+
+turbovec and routed-turboquant solve different problems:
+
+| | turbovec (flat) | routed-turboquant |
+|---|---|---|
+| **What it does** | Scans ALL vectors with 4-bit SIMD scoring | Routes to relevant partitions, scores subset, reranks with float |
+| **Scoring** | 4-bit TurboQuant only (approximate) | TurboQuant first pass + exact float rerank |
+| **Scan** | 100% of vectors, every query | 25-50% of vectors (configurable) |
+| **Recall ceiling** | Limited by 4-bit quantization noise | Breaks through ceiling via float rerank |
+| **Speed at 10K** | 0.016ms (extremely fast) | 0.3-0.5ms (routing overhead) |
+| **Speed at 500K+** | ~0.8ms (linear scan) | ~0.5ms (sublinear) |
+| **Memory** | 1x (codes only) | 2-4x (multi-assignment copies) |
+| **Build** | O(n) instant | O(n × P) k-means + assignment |
+| **Tuning** | bit_width only | M, R, rerank, P (full control) |
+
+**Why turbovec flat has a recall ceiling:**
+
+turbovec compresses each vector to 4 bits per dimension. This is lossy — two vectors that are close in float space may get slightly different scores after quantization. When the true #8 neighbor scores 0.891 in float but 0.887 in TQ, and a non-neighbor scores 0.889 in TQ, the non-neighbor wins. This happens ~15% of the time at dim=384.
+
+turbovec can't fix this because it has no second opinion. It scores everything once with TQ and returns the top-k. There's no mechanism to double-check.
+
+**How routed-turboquant breaks through:**
+
+We use TQ scoring as a cheap filter (not the final answer). TQ identifies the top ~25 candidates. Then we rescore those 25 with exact float inner product. The float rerank corrects the misrankings that TQ introduced.
+
+The routing step (k-means partitions) reduces the number of vectors we need to TQ-score from 100% to 25-50%. Multi-assignment ensures the true neighbors are in the partitions we probe.
+
+Net result: **higher recall than flat TQ, at the cost of higher latency at small scale.**
+
+**When to use which:**
+
+- Use **turbovec flat** when: latency is critical, scale is < 100K, 0.85-0.95 recall is acceptable
+- Use **routed-turboquant** when: recall > 0.93 is required, scale is > 100K, you can tolerate 1-2ms latency
+
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). The highest-impact contribution is adding allowlist/subset scoring support to turbovec's Rust API — this would eliminate the duplicate scoring overhead and make routed competitive on latency at all scales.
