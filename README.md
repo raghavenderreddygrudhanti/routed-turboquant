@@ -59,15 +59,46 @@ We verified at every step:
 
 ## Results
 
-**10K vectors, dim=384, P=32, k=10, rerank=25:**
+### Real Sentence-Transformer Embeddings (all-MiniLM-L6-v2, 384d)
+
+**10K vectors (P=32, rerank=25):**
+
+| Method | Recall@10 | Latency |
+|--------|-----------|---------|
+| turbovec flat | 0.952 | 0.016ms |
+| routed M=2 R=P/4 | **0.987** | 0.297ms |
+| routed M=4 R=P/4 | **0.989** | 0.362ms |
+
+**50K vectors (P=64, rerank=25):**
+
+| Method | Recall@10 | Latency |
+|--------|-----------|---------|
+| turbovec flat | 0.854 | 0.051ms |
+| routed M=3 R=P/4 | **0.934** | 0.792ms |
+| routed M=4 R=P/3 | **0.936** | 1.203ms |
+
+**99K vectors (P=64, rerank=25):**
+
+| Method | Recall@10 | Latency |
+|--------|-----------|---------|
+| turbovec flat | 0.863 | 0.094ms |
+| routed M=2 R=P/2 | **0.900** | 1.815ms |
+| routed M=4 R=P/4 | **0.896** | 1.453ms |
+
+On real embeddings, routed-turboquant consistently beats flat by **3-9%** on recall across all scales. The gap is largest at 50K (+9.4%) where flat TQ's quantization errors compound with more vectors to misrank.
+
+### Random Vectors (dim=384, P=32, rerank=25)
+
+On random data (worst case for routing — no cluster structure):
 
 | Method | Recall@10 | Latency | Storage |
 |--------|-----------|---------|---------|
 | turbovec flat | 0.840 | 0.018ms | 1x |
-| **routed M=4 R=12** | **0.935** | 0.508ms | 4x |
-| **routed M=3 R=16** | **0.944** | 0.573ms | 3x |
-| **routed M=4 R=16** | **0.983** | 0.652ms | 4x |
-| routed M=4 R=24 | 1.000 | 0.974ms | 4x |
+| routed M=4 R=12 | **0.935** | 0.508ms | 4x |
+| routed M=3 R=16 | **0.944** | 0.573ms | 3x |
+| routed M=4 R=16 | **0.983** | 0.652ms | 4x |
+
+Even on random data with no natural clusters, routed achieves +11-17% recall over flat.
 
 ## What We Tried That Didn't Work
 
