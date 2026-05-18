@@ -34,19 +34,53 @@ Multi-assignment (M=2-4) stores each vector in multiple partitions to ensure tru
 
 **Dataset:** 100K sentence-transformer embeddings (all-MiniLM-L6-v2, dim=384)
 
-| Scale | Method | Recall@10 | Latency | Memory |
-|-------|--------|-----------|---------|--------|
-| 10K | turbovec flat | 0.952 | 0.016ms | 192 KB |
-| 10K | routed M=2 R=8 rr=25 | **0.987** | 0.297ms | 576 KB |
-| 10K | routed M=4 R=8 rr=25 | **0.989** | 0.362ms | 960 KB |
-| 50K | turbovec flat | 0.854 | 0.051ms | 960 KB |
-| 50K | routed M=3 R=16 rr=25 | **0.934** | 0.792ms | 4.5 MB |
-| 50K | routed M=4 R=21 rr=25 | **0.936** | 1.203ms | 5.8 MB |
-| 99K | turbovec flat | 0.863 | 0.094ms | 1.9 MB |
-| 99K | routed M=2 R=32 rr=25 | **0.900** | 1.815ms | 5.6 MB |
-| 99K | routed M=4 R=16 rr=25 | **0.896** | 1.453ms | 11.0 MB |
+### 10K vectors
 
-Recall improvement: **+3.7% at 10K, +9.6% at 50K, +4.3% at 99K.**
+| Method | Recall@10 | Latency | Notes |
+|--------|-----------|---------|-------|
+| FAISS Flat (exact) | 1.000 | 0.014ms | brute force float |
+| FAISS IVF-Flat (nprobe=16) | 0.989 | 0.016ms | IVF routing + float scoring |
+| FAISS HNSW (M=32 ef=64) | 0.981 | 0.008ms | graph index |
+| **routed-turboquant M=2 R=8 rr=25** | **0.987** | 0.297ms | ours |
+| turbovec flat | 0.952 | 0.016ms | 4-bit TQ flat scan |
+| FAISS IVFPQ (nprobe=16) | 0.871 | 0.012ms | IVF + product quantization |
+
+### 50K vectors
+
+| Method | Recall@10 | Latency | Notes |
+|--------|-----------|---------|-------|
+| FAISS Flat (exact) | 1.000 | 0.068ms | brute force float |
+| FAISS IVF-Flat (nprobe=16) | 0.993 | 0.118ms | IVF routing + float scoring |
+| **routed-turboquant M=4 R=21 rr=25** | **0.936** | 1.203ms | ours |
+| FAISS HNSW (M=32 ef=64) | 0.931 | 0.023ms | graph index |
+| turbovec flat | 0.854 | 0.051ms | 4-bit TQ flat scan |
+| FAISS IVFPQ (nprobe=16) | 0.734 | 0.028ms | IVF + product quantization |
+
+### 99K vectors
+
+| Method | Recall@10 | Latency | Notes |
+|--------|-----------|---------|-------|
+| FAISS Flat (exact) | 1.000 | 0.136ms | brute force float |
+| FAISS IVF-Flat (nprobe=16) | 0.986 | 0.135ms | IVF routing + float scoring |
+| **routed-turboquant M=2 R=32 rr=25** | **0.900** | 1.815ms | ours |
+| FAISS HNSW (M=32 ef=64) | 0.888 | 0.018ms | graph index |
+| turbovec flat | 0.863 | 0.094ms | 4-bit TQ flat scan |
+| FAISS IVFPQ (nprobe=16) | 0.822 | 0.027ms | IVF + product quantization |
+
+### Analysis
+
+**Recall ranking:** FAISS IVF-Flat > routed-turboquant > FAISS HNSW > turbovec flat > FAISS IVFPQ
+
+**Latency ranking:** FAISS HNSW > FAISS IVFPQ > turbovec flat > FAISS Flat > FAISS IVF-Flat > routed-turboquant
+
+**Where routed-turboquant fits:**
+- Higher recall than turbovec flat (+3-9%) and FAISS HNSW at 50K+
+- Higher recall than FAISS IVFPQ (+7-20%)
+- Lower recall than FAISS IVF-Flat (which uses full float scoring, not quantized)
+- Slower than all FAISS methods at current scale (routing overhead dominates)
+- Uses 8-16x less memory than FAISS IVF-Flat (4-bit codes vs float32)
+
+**The honest positioning:** routed-turboquant occupies the space between turbovec flat (fast, moderate recall) and FAISS IVF-Flat (high recall, high memory). It achieves near-IVF-Flat recall using quantized storage, at the cost of higher latency from per-partition TQ overhead.
 
 ### Random Vectors (worst case — no cluster structure)
 
