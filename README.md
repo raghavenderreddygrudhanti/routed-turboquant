@@ -1,6 +1,6 @@
 # routed-turboquant
 
-Improves recall over flat TurboQuant using routed candidate generation and lightweight float reranking. Built on [turbovec](https://github.com/RyanCodrai/turbovec)'s SIMD scoring kernels.
+Improves Recall@10 over flat TurboQuant using routed candidate generation and top-k float reranking. Built on [turbovec](https://github.com/RyanCodrai/turbovec)'s SIMD scoring kernels.
 
 ## The Problem
 
@@ -80,12 +80,10 @@ Without float rerank (TQ scores only): ~40 MB. The float vectors for reranking a
 | 10K | 0.016ms | 0.297ms | per-partition TQ call overhead (0.03ms × 8) |
 | 50K | 0.051ms | 0.792ms | per-partition TQ call overhead (0.03ms × 16) |
 | 99K | 0.094ms | 1.453ms | per-partition TQ call overhead (0.03ms × 16) |
-| 500K (est.) | ~0.5ms | ~0.5ms | **crossover point** |
-| 1M (est.) | ~1.0ms | ~0.6ms | routed wins (scans 25% not 100%) |
+| 500K (est.) | ~0.5ms | ~0.5ms | **projected crossover** |
+| 1M (est.) | ~1.0ms | ~0.6ms | routed projected faster |
 
-The per-partition TQ `search()` call has ~0.03ms fixed overhead (rotation matrix lookup, blocked cache access). This dominates at small scale. At 500K+, flat scan time exceeds routing overhead and routed becomes faster.
-
-**Note:** The 500K and 1M estimates are projections based on observed linear scaling of flat TQ. Full benchmarks at these scales are pending (build time at 500K with M=4 P=128 is ~10 minutes).
+The per-partition TQ `search()` call has ~0.03ms fixed overhead (rotation matrix lookup, blocked cache access). This dominates at small scale. We expect the latency crossover to appear around 500K+ where flat scan time exceeds routing overhead, but this has not been validated with a full benchmark yet.
 
 ## How It Differs from turbovec
 
@@ -95,7 +93,7 @@ The per-partition TQ `search()` call has ~0.03ms fixed overhead (rotation matrix
 | **Scan** | 100% of vectors | 25-50% (configurable) |
 | **Recall ceiling** | Limited by quantization noise | Breaks through via float rerank |
 | **Speed < 100K** | Faster (no routing overhead) | Slower (per-partition overhead) |
-| **Speed > 500K** | Slower (linear scan) | Faster (sublinear) |
+| **Speed > 500K** | Slower (linear scan) | Potentially faster (sublinear, not yet proven) |
 | **Memory** | 1x (codes + norms) | 2-4x codes + float vectors |
 | **Build** | O(n) instant | O(n × P) k-means |
 | **Tuning** | bit_width only | M, R, P, rerank (full control) |
@@ -135,7 +133,7 @@ Lesson: **TQ-level scoring is the necessary middle layer.** Nothing cheaper prov
 4. **Build time is high.** O(n × P) for k-means + multi-assignment. ~80s at 99K with P=64.
 5. **Depends on turbovec as sibling directory.** Not published to crates.io independently.
 6. **No streaming insert/delete.** Index must be rebuilt to add vectors.
-7. **500K+ crossover not yet benchmarked.** Projected from linear scaling, not measured.
+7. **500K+ latency crossover not yet benchmarked.** Projected from linear scaling, not measured. The claim that routed becomes faster at large scale is a hypothesis.
 
 ## Quick Start
 
