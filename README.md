@@ -135,20 +135,16 @@ cargo run --release --example bench_rerank
 
 ```
 src/
-├── lib.rs          — crate root, exports
-├── kmeans.rs       — float k-means++ (routing)
-├── index.rs        — V1: per-partition TQ + multi-assign + rerank
-├── index_v2.rs     — V2: single index + partial dot pre-rank (experimental)
-└── python.rs       — pyo3 bindings (optional)
+├── lib.rs       — crate root
+├── kmeans.rs    — float k-means++ (partition routing)
+└── index.rs     — RoutedTurboQuantIndex (multi-assign + TQ scoring + rerank)
 
 examples/
-├── bench_v1_tuned.rs    — M/R sweep (main benchmark)
+├── bench_v1_tuned.rs    — main benchmark (M/R sweep)
 ├── diagnose.rs          — correctness verification
 ├── diagnose_multi.rs    — multi-assignment impact
 ├── bench_boundary.rs    — boundary-aware assignment
-├── bench_rerank.rs      — reranking impact
-├── bench_final.rs       — scale + candidate metrics
-└── bench_v2.rs          — V2 experiments
+└── bench_rerank.rs      — reranking impact
 ```
 
 ## Comparison with turbovec

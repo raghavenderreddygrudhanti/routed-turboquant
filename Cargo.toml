@@ -9,7 +9,7 @@ repository = "https://github.com/raghavenderreddygrudhanti/routed-turboquant"
 
 [lib]
 name = "routed_turboquant"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 
 [dependencies]
 turbovec = { path = "../turbovec/turbovec" }
@@ -22,19 +22,6 @@ blas-src = { version = "0.10", features = ["accelerate"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 blas-src = { version = "0.10", features = ["openblas"] }
 openblas-src = { version = "0.10", default-features = false, features = ["system"] }
-
-[dependencies.pyo3]
-version = "0.22"
-features = ["extension-module"]
-optional = true
-
-[dependencies.numpy]
-version = "0.22"
-optional = true
-
-[features]
-default = []
-python = ["pyo3", "numpy"]
 
 [profile.release]
 opt-level = 3
