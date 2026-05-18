@@ -1,5 +1,7 @@
 # routed-turboquant
 
+[![CI](https://github.com/raghavenderreddygrudhanti/routed-turboquant/actions/workflows/ci.yml/badge.svg)](https://github.com/raghavenderreddygrudhanti/routed-turboquant/actions/workflows/ci.yml)
+
 Improves Recall@10 over flat TurboQuant using routed candidate generation and top-k float reranking. Built on [turbovec](https://github.com/RyanCodrai/turbovec)'s SIMD scoring kernels.
 
 ## The Problem
@@ -122,32 +124,29 @@ The memory advantage over FAISS IVF-Flat applies only when reranking is disabled
 
 ## Latency Analysis
 
-### Measured results
+| Scale | turbovec flat | routed M=1 R=16 (25% scan) | Speedup |
+|-------|--------------|----------------------------|---------|
+| 10K | 0.016ms | 0.297ms | 0.05x |
+| 50K | 0.051ms | 0.792ms | 0.06x |
+| 99K | 0.094ms | 0.693ms | 0.14x |
+| 100K | 0.107ms | 0.693ms | 0.15x |
+| 200K | 0.229ms | 0.909ms | 0.25x |
+| **500K** | **0.605ms** | **1.488ms** | **0.41x** |
 
-| Scale | turbovec flat | routed (best) | Overhead source |
-|-------|--------------|---------------|-----------------|
-| 10K | 0.016ms | 0.297ms | per-partition TQ call (0.03ms × 8 partitions) |
-| 50K | 0.051ms | 0.792ms | per-partition TQ call (0.03ms × 16 partitions) |
-| 99K | 0.094ms | 1.453ms | per-partition TQ call (0.03ms × 16 partitions) |
+The gap closes with scale (from 0.05x at 10K to 0.41x at 500K) but **routed is still 2.5x slower at 500K**. Extrapolating, the crossover may occur around 2-3M vectors, but this is unverified.
 
-### Projected (not yet measured)
+**Root cause:** Per-partition TQ `search()` has ~0.03ms fixed overhead per call (rotation matrix, blocked cache). With 16 partitions probed, that's ~0.48ms of overhead regardless of partition size. turbovec flat has zero per-call overhead.
 
-| Scale | turbovec flat (est.) | routed (est.) | Notes |
-|-------|---------------------|---------------|-------|
-| 500K | ~0.5ms | ~0.5ms | projected crossover |
-| 1M | ~1.0ms | ~0.6ms | routed projected faster |
-
-These projections assume flat TQ scales linearly (confirmed at 10K-99K) and routed overhead stays constant. **This has not been validated.** Full 500K/1M benchmarks are pending due to build time (~10 min at 500K with M=4 P=128).
+**Conclusion:** routed-turboquant is a **recall improvement** tool, not a speed improvement at any tested scale (up to 500K).
 
 ## How It Differs from turbovec
-
 | | turbovec (flat) | routed-turboquant |
 |---|---|---|
 | **Scoring** | 4-bit TurboQuant only | TurboQuant + exact float rerank |
 | **Scan** | 100% of vectors | 25-50% (configurable) |
 | **Recall ceiling** | Limited by quantization noise | Breaks through via float rerank |
 | **Speed < 100K** | Faster (no routing overhead) | Slower (per-partition overhead) |
-| **Speed > 500K** | Slower (linear scan) | Potentially faster (sublinear, not yet proven) |
+| **Speed > 500K** | 0.605ms at 500K | 1.488ms at 500K (still slower, gap closing) |
 | **Memory** | 1x (codes + norms) | 2-4x codes + float vectors for rerank |
 | **Build** | O(n) instant | O(n × P) k-means |
 | **Tuning** | bit_width only | M, R, P, rerank (full control) |
@@ -187,7 +186,7 @@ Lesson: **TQ-level scoring is the necessary middle layer.** Nothing cheaper prov
 4. **Build time is high.** O(n × P) for k-means + multi-assignment. ~80s at 99K with P=64.
 5. **Depends on turbovec as sibling directory.** Not published to crates.io independently.
 6. **No streaming insert/delete.** Index must be rebuilt to add vectors.
-7. **500K+ latency crossover not yet benchmarked.** Projected from linear scaling, not measured. The claim that routed becomes faster at large scale is a hypothesis.
+7. **Still slower than flat at 500K (measured).** Routed is 2.5x slower than flat at 500K. The crossover may be around 2-3M but is unverified.
 8. **Lower recall than FAISS IVF-Flat.** IVF-Flat uses exact float scoring within partitions (no quantization loss). Our TQ scoring introduces noise that reranking only partially corrects.
 
 ## Quick Start
@@ -255,8 +254,10 @@ examples/
 └── bench_rerank.rs      — reranking impact
 
 benchmarks/
-└── faiss_baselines.py   — FAISS comparison (Flat, HNSW, IVF-Flat, IVFPQ)
+└── faiss_baselines.py   — FAISS comparison script (Python, for baseline numbers only)
 ```
+
+Note: The core library and all performance-critical code is Rust. The Python script is only used to generate FAISS baseline numbers for comparison.
 
 ## Benchmarking
 
