@@ -2,12 +2,12 @@
 
 extern crate blas_src;
 
+use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
 use std::collections::HashSet;
-use std::time::Instant;
 use std::fs::File;
 use std::io::Read;
+use std::time::Instant;
 use turbovec::TurboQuantIndex;
-use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
 
 fn load_npy(path: &str) -> (Vec<f32>, usize, usize) {
     let mut file = File::open(path).expect("cannot open npy file");
@@ -19,12 +19,16 @@ fn load_npy(path: &str) -> (Vec<f32>, usize, usize) {
     let shape_start = header.find("'shape': (").unwrap() + 10;
     let shape_end = header[shape_start..].find(')').unwrap() + shape_start;
     let shape_str = &header[shape_start..shape_end];
-    let dims: Vec<usize> = shape_str.split(',')
-        .map(|s| s.trim().parse::<usize>().unwrap()).collect();
+    let dims: Vec<usize> = shape_str
+        .split(',')
+        .map(|s| s.trim().parse::<usize>().unwrap())
+        .collect();
     let (n, dim) = (dims[0], dims[1]);
     let data_start = 10 + header_len;
-    let floats: Vec<f32> = buf[data_start..].chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    let floats: Vec<f32> = buf[data_start..]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
     assert_eq!(floats.len(), n * dim);
     (floats, n, dim)
 }
@@ -34,8 +38,12 @@ fn exact_topk(vectors: &[f32], query: &[f32], dim: usize, k: usize) -> Vec<usize
     let mut scores: Vec<(f32, usize)> = (0..n)
         .map(|i| {
             let v = &vectors[i * dim..(i + 1) * dim];
-            (v.iter().zip(query.iter()).map(|(a, b)| a * b).sum::<f32>(), i)
-        }).collect();
+            (
+                v.iter().zip(query.iter()).map(|(a, b)| a * b).sum::<f32>(),
+                i,
+            )
+        })
+        .collect();
     scores.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     scores.iter().take(k).map(|(_, i)| *i).collect()
 }
@@ -58,7 +66,10 @@ fn main() {
     let p = 64; // fewer partitions = faster build, larger partitions = better TQ scoring
 
     println!("\n================================================================");
-    println!("  REAL DATA: n={}, dim={}, P={}, k={}, nq={}", n, dim, p, k, nq);
+    println!(
+        "  REAL DATA: n={}, dim={}, P={}, k={}, nq={}",
+        n, dim, p, k, nq
+    );
     println!("================================================================");
 
     let vectors = &all_vectors[..n * dim];
@@ -83,15 +94,24 @@ fn main() {
 
     let mut flat_recall_sum = 0.0;
     for i in 0..nq {
-        let pred: Vec<usize> = flat_results.indices_for_query(i)
-            .iter().filter(|&&x| x >= 0).map(|&x| x as usize).collect();
+        let pred: Vec<usize> = flat_results
+            .indices_for_query(i)
+            .iter()
+            .filter(|&&x| x >= 0)
+            .map(|&x| x as usize)
+            .collect();
         flat_recall_sum += recall_score(&pred, &exact_gt[i], k);
     }
     let flat_recall = flat_recall_sum / nq as f64;
-    println!("  turbovec flat:     recall={:.3}  latency={:.3}ms\n", flat_recall, flat_latency);
+    println!(
+        "  turbovec flat:     recall={:.3}  latency={:.3}ms\n",
+        flat_recall, flat_latency
+    );
 
-    println!("  {:<22} {:<8} {:<10} {:<10} {:<10} {:<10}",
-             "Config", "Recall", "Latency", "vs Flat", "Speedup", "Build_s");
+    println!(
+        "  {:<22} {:<8} {:<10} {:<10} {:<10} {:<10}",
+        "Config", "Recall", "Latency", "vs Flat", "Speedup", "Build_s"
+    );
     println!("  {}", "-".repeat(70));
 
     // Best configs only (M=1 and M=2 with moderate R)
@@ -107,9 +127,16 @@ fn main() {
 
     for (m, r, label) in &configs {
         let config = RoutedTQConfig {
-            dim, n_partitions: p, n_probe: *r, bit_width: 4,
-            kmeans_iter: 10, seed: 42, multi_assign: *m,
-            boundary_threshold: None, max_assign: 4, rerank_top: 25,
+            dim,
+            n_partitions: p,
+            n_probe: *r,
+            bit_width: 4,
+            kmeans_iter: 10,
+            seed: 42,
+            multi_assign: *m,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 25,
         };
 
         let build_start = Instant::now();
@@ -132,7 +159,9 @@ fn main() {
         let vs_flat = avg_recall / flat_recall * 100.0;
         let speedup = flat_latency / latency;
 
-        println!("  {:<22} {:<8.3} {:<10.3} {:<10.1}% {:<10.2}x {:<10.1}",
-                 label, avg_recall, latency, vs_flat, speedup, build_s);
+        println!(
+            "  {:<22} {:<8.3} {:<10.3} {:<10.1}% {:<10.2}x {:<10.1}",
+            label, avg_recall, latency, vs_flat, speedup, build_s
+        );
     }
 }

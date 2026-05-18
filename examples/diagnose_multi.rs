@@ -5,13 +5,13 @@
 
 extern crate blas_src;
 
-use std::collections::HashSet;
-use std::time::Instant;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use turbovec::TurboQuantIndex;
 use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
 use routed_turboquant::kmeans::kmeans_float;
+use std::collections::HashSet;
+use std::time::Instant;
+use turbovec::TurboQuantIndex;
 
 fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -20,7 +20,11 @@ fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
         for d in 0..dim {
             vecs[i * dim + d] = rand::Rng::gen_range(&mut rng, -1.0..1.0);
         }
-        let norm: f32 = vecs[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm: f32 = vecs[i * dim..(i + 1) * dim]
+            .iter()
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt();
         for d in 0..dim {
             vecs[i * dim + d] /= norm;
         }
@@ -74,8 +78,12 @@ fn main() {
     let flat_results = flat_idx.search(&queries, k);
     let mut flat_recall_sum = 0.0;
     for i in 0..nq {
-        let pred: Vec<usize> = flat_results.indices_for_query(i)
-            .iter().filter(|&&x| x >= 0).map(|&x| x as usize).collect();
+        let pred: Vec<usize> = flat_results
+            .indices_for_query(i)
+            .iter()
+            .filter(|&&x| x >= 0)
+            .map(|&x| x as usize)
+            .collect();
         flat_recall_sum += recall_score(&pred, &exact_gt[i], k);
     }
     let flat_recall = flat_recall_sum / nq as f64;
@@ -100,7 +108,14 @@ fn main() {
 
     // For each vector, compute its top-M partition assignments
     // (needed for partition hit rate calculation)
-    fn get_multi_assignments(unit_vectors: &[f32], centroids: &[f32], n: usize, dim: usize, p: usize, m: usize) -> Vec<Vec<u32>> {
+    fn get_multi_assignments(
+        unit_vectors: &[f32],
+        centroids: &[f32],
+        n: usize,
+        dim: usize,
+        p: usize,
+        m: usize,
+    ) -> Vec<Vec<u32>> {
         let mut assignments = Vec::with_capacity(n);
         for i in 0..n {
             let v = &unit_vectors[i * dim..(i + 1) * dim];
@@ -118,8 +133,10 @@ fn main() {
     }
 
     println!("=== Multi-Assignment Impact ===");
-    println!("{:<6} {:<6} {:<10} {:<15} {:<15} {:<12} {:<12}",
-             "M", "R", "Scan%", "PartHit@10", "Recall", "Latency_ms", "StorageX");
+    println!(
+        "{:<6} {:<6} {:<10} {:<15} {:<15} {:<12} {:<12}",
+        "M", "R", "Scan%", "PartHit@10", "Recall", "Latency_ms", "StorageX"
+    );
 
     for &m in &[1, 2, 3, 4] {
         // Compute multi-assignments for hit rate
@@ -134,7 +151,10 @@ fn main() {
                 bit_width: 4,
                 kmeans_iter: 10,
                 seed: 42,
-                multi_assign: m, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+                multi_assign: m,
+                boundary_threshold: None,
+                max_assign: 4,
+                rerank_top: 0,
             };
 
             let routed_idx = RoutedTurboQuantIndex::build(&vectors, config);
@@ -155,7 +175,8 @@ fn main() {
                     })
                     .collect();
                 centroid_scores.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-                let selected: HashSet<u32> = centroid_scores.iter()
+                let selected: HashSet<u32> = centroid_scores
+                    .iter()
                     .take(r)
                     .map(|(_, pid)| *pid as u32)
                     .collect();
@@ -185,8 +206,16 @@ fn main() {
             let avg_recall = recall_sum / nq as f64;
             let scan_pct = (r as f64 / p as f64) * 100.0;
 
-            println!("{:<6} {:<6} {:<10.1} {:<15.3} {:<15.3} {:<12.3} {:<12}",
-                     m, r, scan_pct, avg_part_hit, avg_recall, latency_ms, format!("{}x", m));
+            println!(
+                "{:<6} {:<6} {:<10.1} {:<15.3} {:<15.3} {:<12.3} {:<12}",
+                m,
+                r,
+                scan_pct,
+                avg_part_hit,
+                avg_recall,
+                latency_ms,
+                format!("{}x", m)
+            );
         }
         println!();
     }
@@ -199,7 +228,10 @@ fn main() {
     // Find configs where recall >= 0.8 * flat_recall
     let target = flat_recall * 0.95;
     println!("Target: {:.3} (95% of flat recall)", target);
-    println!("{:<6} {:<6} {:<10} {:<15} {:<12}", "M", "R", "Scan%", "Recall", "Latency_ms");
+    println!(
+        "{:<6} {:<6} {:<10} {:<15} {:<12}",
+        "M", "R", "Scan%", "Recall", "Latency_ms"
+    );
 
     for &m in &[1, 2, 3, 4] {
         for &r in &[4, 8, 12, 16, 32] {
@@ -210,7 +242,10 @@ fn main() {
                 bit_width: 4,
                 kmeans_iter: 10,
                 seed: 42,
-                multi_assign: m, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+                multi_assign: m,
+                boundary_threshold: None,
+                max_assign: 4,
+                rerank_top: 0,
             };
             let routed_idx = RoutedTurboQuantIndex::build(&vectors, config);
 
@@ -227,7 +262,10 @@ fn main() {
 
             if avg_recall >= target {
                 let scan_pct = (r as f64 / p as f64) * 100.0;
-                println!("{:<6} {:<6} {:<10.1} {:<15.3} {:<12.3}", m, r, scan_pct, avg_recall, latency_ms);
+                println!(
+                    "{:<6} {:<6} {:<10.1} {:<15.3} {:<12.3}",
+                    m, r, scan_pct, avg_recall, latency_ms
+                );
             }
         }
     }

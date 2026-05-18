@@ -5,12 +5,12 @@
 
 extern crate blas_src;
 
-use std::collections::HashSet;
-use std::time::Instant;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use turbovec::TurboQuantIndex;
 use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
+use std::collections::HashSet;
+use std::time::Instant;
+use turbovec::TurboQuantIndex;
 
 fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -19,8 +19,14 @@ fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
         for d in 0..dim {
             vecs[i * dim + d] = rand::Rng::gen_range(&mut rng, -1.0..1.0);
         }
-        let norm: f32 = vecs[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum::<f32>().sqrt();
-        for d in 0..dim { vecs[i * dim + d] /= norm; }
+        let norm: f32 = vecs[i * dim..(i + 1) * dim]
+            .iter()
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt();
+        for d in 0..dim {
+            vecs[i * dim + d] /= norm;
+        }
     }
     vecs
 }
@@ -77,9 +83,16 @@ fn main() {
 
         for (r, label) in &configs {
             let config = RoutedTQConfig {
-                dim, n_partitions: p, n_probe: *r, bit_width: 4,
-                kmeans_iter: 10, seed: 42, multi_assign: 1,
-                boundary_threshold: None, max_assign: 4, rerank_top: 25,
+                dim,
+                n_partitions: p,
+                n_probe: *r,
+                bit_width: 4,
+                kmeans_iter: 10,
+                seed: 42,
+                multi_assign: 1,
+                boundary_threshold: None,
+                max_assign: 4,
+                rerank_top: 25,
             };
 
             let build_start = Instant::now();
@@ -99,8 +112,10 @@ fn main() {
             let speedup = flat_latency / latency;
             let scan_pct = (*r as f64 / p as f64) * 100.0;
 
-            println!("  routed {}: latency={:.3}ms  speedup={:.2}x  scan={:.0}%  build={:.0}s",
-                     label, latency, speedup, scan_pct, build_s);
+            println!(
+                "  routed {}: latency={:.3}ms  speedup={:.2}x  scan={:.0}%  build={:.0}s",
+                label, latency, speedup, scan_pct, build_s
+            );
         }
         println!();
     }

@@ -5,12 +5,12 @@
 
 extern crate blas_src;
 
-use std::collections::HashSet;
-use std::time::Instant;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use turbovec::TurboQuantIndex;
 use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
+use std::collections::HashSet;
+use std::time::Instant;
+use turbovec::TurboQuantIndex;
 
 fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -19,7 +19,11 @@ fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
         for d in 0..dim {
             vecs[i * dim + d] = rand::Rng::gen_range(&mut rng, -1.0..1.0);
         }
-        let norm: f32 = vecs[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm: f32 = vecs[i * dim..(i + 1) * dim]
+            .iter()
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt();
         for d in 0..dim {
             vecs[i * dim + d] /= norm;
         }
@@ -70,15 +74,21 @@ fn main() {
     let flat_results = flat_idx.search(&queries, k);
     let mut flat_recall_sum = 0.0;
     for i in 0..nq {
-        let pred: Vec<usize> = flat_results.indices_for_query(i)
-            .iter().filter(|&&x| x >= 0).map(|&x| x as usize).collect();
+        let pred: Vec<usize> = flat_results
+            .indices_for_query(i)
+            .iter()
+            .filter(|&&x| x >= 0)
+            .map(|&x| x as usize)
+            .collect();
         flat_recall_sum += recall_score(&pred, &exact_gt[i], k);
     }
     let flat_recall = flat_recall_sum / nq as f64;
     println!("turbovec flat recall: {:.3}\n", flat_recall);
 
-    println!("{:<20} {:<8} {:<12} {:<12} {:<12} {:<12}",
-             "Config", "Rerank", "Recall", "vs Flat", "Latency_ms", "StorageX");
+    println!(
+        "{:<20} {:<8} {:<12} {:<12} {:<12} {:<12}",
+        "Config", "Rerank", "Recall", "vs Flat", "Latency_ms", "StorageX"
+    );
     println!("{}", "-".repeat(76));
 
     // Test matrix: M × R × rerank_top
@@ -119,16 +129,25 @@ fn main() {
             let vs_flat = avg_recall / flat_recall;
             let sf = idx.storage_factor();
 
-            println!("{:<20} {:<8} {:<12.3} {:<12.1}% {:<12.3} {:<12.1}",
-                     label, rerank, avg_recall, vs_flat * 100.0, latency, sf);
+            println!(
+                "{:<20} {:<8} {:<12.3} {:<12.1}% {:<12.3} {:<12.1}",
+                label,
+                rerank,
+                avg_recall,
+                vs_flat * 100.0,
+                latency,
+                sf
+            );
         }
         println!();
     }
 
     // Best config: boundary-aware + reranking
     println!("\n=== Boundary-aware + Reranking ===");
-    println!("{:<25} {:<8} {:<12} {:<12} {:<12} {:<12}",
-             "Config", "Rerank", "Recall", "vs Flat", "Latency_ms", "StorageX");
+    println!(
+        "{:<25} {:<8} {:<12} {:<12} {:<12} {:<12}",
+        "Config", "Rerank", "Recall", "vs Flat", "Latency_ms", "StorageX"
+    );
     println!("{}", "-".repeat(81));
 
     for &threshold in &[0.05, 0.07, 0.10] {
@@ -162,8 +181,15 @@ fn main() {
             let sf = idx.storage_factor();
 
             let label = format!("Boundary t={:.2} R=12", threshold);
-            println!("{:<25} {:<8} {:<12.3} {:<12.1}% {:<12.3} {:<12.2}",
-                     label, rerank, avg_recall, vs_flat * 100.0, latency, sf);
+            println!(
+                "{:<25} {:<8} {:<12.3} {:<12.1}% {:<12.3} {:<12.2}",
+                label,
+                rerank,
+                avg_recall,
+                vs_flat * 100.0,
+                latency,
+                sf
+            );
         }
         println!();
     }

@@ -10,8 +10,8 @@
 //! Complexity: O(n/P * R) per query instead of O(n).
 //! At P=128, R=8: scans 6.2% of vectors.
 
-use turbovec::TurboQuantIndex;
 use rayon::prelude::*;
+use turbovec::TurboQuantIndex;
 
 use crate::kmeans::{kmeans_float, KMeansResult};
 
@@ -120,11 +120,17 @@ impl RoutedTurboQuantIndex {
     /// of M× storage and slightly larger partitions to scan.
     pub fn build(vectors: &[f32], config: RoutedTQConfig) -> Self {
         let n = vectors.len() / config.dim;
-        assert_eq!(vectors.len(), n * config.dim, "vectors length must be n * dim");
+        assert_eq!(
+            vectors.len(),
+            n * config.dim,
+            "vectors length must be n * dim"
+        );
         assert!(n > 0, "need at least one vector");
         assert!(config.multi_assign >= 1, "multi_assign must be >= 1");
-        assert!(config.multi_assign <= config.n_partitions,
-                "multi_assign must be <= n_partitions");
+        assert!(
+            config.multi_assign <= config.n_partitions,
+            "multi_assign must be <= n_partitions"
+        );
 
         // Normalize vectors for clustering
         let mut unit_vectors = vectors.to_vec();
@@ -141,7 +147,10 @@ impl RoutedTurboQuantIndex {
         }
 
         // Run k-means
-        let KMeansResult { centroids, assignments: _ } = kmeans_float(
+        let KMeansResult {
+            centroids,
+            assignments: _,
+        } = kmeans_float(
             &unit_vectors,
             n,
             config.dim,
@@ -228,7 +237,10 @@ impl RoutedTurboQuantIndex {
                     tq_index.add(&buf);
                     tq_index.prepare();
                 }
-                Partition { tq_index, global_ids }
+                Partition {
+                    tq_index,
+                    global_ids,
+                }
             })
             .collect();
 
@@ -330,7 +342,11 @@ impl RoutedTurboQuantIndex {
             .collect();
         combined.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
 
-        let target = if self.config.rerank_top > 0 { self.config.rerank_top } else { k };
+        let target = if self.config.rerank_top > 0 {
+            self.config.rerank_top
+        } else {
+            k
+        };
         let mut deduped: Vec<(f32, usize)> = Vec::with_capacity(target);
 
         if self.config.multi_assign > 1 || self.config.boundary_threshold.is_some() {
@@ -356,7 +372,8 @@ impl RoutedTurboQuantIndex {
         // Float reranking
         if self.config.rerank_top > 0 {
             if let Some(ref vectors) = self.vectors {
-                let mut reranked: Vec<(f32, usize)> = deduped.iter()
+                let mut reranked: Vec<(f32, usize)> = deduped
+                    .iter()
                     .map(|&(_, gid)| {
                         let v = &vectors[gid * dim..(gid + 1) * dim];
                         let sim: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
@@ -444,7 +461,11 @@ impl RoutedTurboQuantIndex {
         }
         centroid_scores.select_nth_unstable_by(n_probe - 1, |a, b| b.0.partial_cmp(&a.0).unwrap());
 
-        let collect_k = if self.config.rerank_top > 0 { self.config.rerank_top } else { k };
+        let collect_k = if self.config.rerank_top > 0 {
+            self.config.rerank_top
+        } else {
+            k
+        };
 
         // Count raw partition entries (actual scan volume)
         let mut raw_partition_entries: usize = 0;
@@ -453,7 +474,9 @@ impl RoutedTurboQuantIndex {
 
         for &(_, pid) in centroid_scores[..n_probe].iter() {
             let partition = &self.partitions[pid];
-            if partition.global_ids.is_empty() { continue; }
+            if partition.global_ids.is_empty() {
+                continue;
+            }
 
             // Raw entries = total vectors in this partition (what TQ actually scans)
             raw_partition_entries += partition.global_ids.len();
@@ -463,7 +486,9 @@ impl RoutedTurboQuantIndex {
             let scores = results.scores_for_query(0);
             let local_ids = results.indices_for_query(0);
             for (&score, &local_id) in scores.iter().zip(local_ids.iter()) {
-                if local_id < 0 { continue; }
+                if local_id < 0 {
+                    continue;
+                }
                 all_global_ids.push(partition.global_ids[local_id as usize]);
                 all_scores.push(score);
             }
@@ -472,18 +497,28 @@ impl RoutedTurboQuantIndex {
         let tq_results_collected = all_global_ids.len();
 
         if tq_results_collected == 0 {
-            return ((vec![], vec![]), SearchStats {
-                raw_partition_entries,
-                tq_results_collected: 0,
-                unique_ids: 0,
-                rerank_k: 0,
-            });
+            return (
+                (vec![], vec![]),
+                SearchStats {
+                    raw_partition_entries,
+                    tq_results_collected: 0,
+                    unique_ids: 0,
+                    rerank_k: 0,
+                },
+            );
         }
 
-        let mut combined: Vec<(f32, usize)> = all_scores.into_iter().zip(all_global_ids.into_iter()).collect();
+        let mut combined: Vec<(f32, usize)> = all_scores
+            .into_iter()
+            .zip(all_global_ids.into_iter())
+            .collect();
         combined.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
 
-        let target = if self.config.rerank_top > 0 { self.config.rerank_top } else { k };
+        let target = if self.config.rerank_top > 0 {
+            self.config.rerank_top
+        } else {
+            k
+        };
         let mut deduped: Vec<(f32, usize)> = Vec::with_capacity(target);
         let mut visited = vec![false; self.n_vectors];
         let mut total_unique_in_tq = 0usize;
@@ -502,7 +537,8 @@ impl RoutedTurboQuantIndex {
         // Rerank
         if self.config.rerank_top > 0 {
             if let Some(ref vectors) = self.vectors {
-                let mut reranked: Vec<(f32, usize)> = deduped.iter()
+                let mut reranked: Vec<(f32, usize)> = deduped
+                    .iter()
                     .map(|&(_, gid)| {
                         let v = &vectors[gid * dim..(gid + 1) * dim];
                         let sim: f32 = query.iter().zip(v.iter()).map(|(a, b)| a * b).sum();
@@ -513,24 +549,30 @@ impl RoutedTurboQuantIndex {
                 reranked.truncate(k);
                 let scores: Vec<f32> = reranked.iter().map(|(s, _)| *s).collect();
                 let indices: Vec<usize> = reranked.iter().map(|(_, i)| *i).collect();
-                return ((scores, indices), SearchStats {
-                    raw_partition_entries,
-                    tq_results_collected,
-                    unique_ids: total_unique_in_tq,
-                    rerank_k,
-                });
+                return (
+                    (scores, indices),
+                    SearchStats {
+                        raw_partition_entries,
+                        tq_results_collected,
+                        unique_ids: total_unique_in_tq,
+                        rerank_k,
+                    },
+                );
             }
         }
 
         deduped.truncate(k);
         let scores: Vec<f32> = deduped.iter().map(|(s, _)| *s).collect();
         let indices: Vec<usize> = deduped.iter().map(|(_, i)| *i).collect();
-        ((scores, indices), SearchStats {
-            raw_partition_entries,
-            tq_results_collected,
-            unique_ids: total_unique_in_tq,
-            rerank_k,
-        })
+        (
+            (scores, indices),
+            SearchStats {
+                raw_partition_entries,
+                tq_results_collected,
+                unique_ids: total_unique_in_tq,
+                rerank_k,
+            },
+        )
     }
 
     /// Approximate memory usage in bytes.
@@ -597,7 +639,11 @@ mod tests {
                 vecs[i * dim + d] = rand::Rng::gen_range(&mut rng, -1.0..1.0);
             }
             // Normalize
-            let norm: f32 = vecs[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum::<f32>().sqrt();
+            let norm: f32 = vecs[i * dim..(i + 1) * dim]
+                .iter()
+                .map(|x| x * x)
+                .sum::<f32>()
+                .sqrt();
             for d in 0..dim {
                 vecs[i * dim + d] /= norm;
             }
@@ -619,7 +665,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 5,
             seed: 42,
-            multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let index = RoutedTurboQuantIndex::build(&vectors, config);
@@ -655,7 +704,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 10,
             seed: 42,
-            multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let index = RoutedTurboQuantIndex::build(&vectors, config);
@@ -683,7 +735,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 5,
             seed: 42,
-            multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let index = RoutedTurboQuantIndex::build(&vectors, config);
@@ -710,7 +765,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 3,
             seed: 42,
-            multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let index = RoutedTurboQuantIndex::build(&vectors, config);
@@ -730,7 +788,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 2,
             seed: 42,
-            multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let index = RoutedTurboQuantIndex::build(&vectors, config);
@@ -760,7 +821,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 10,
             seed: 42,
-            multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
         let idx1 = RoutedTurboQuantIndex::build(&vectors, config1);
         let (_, ids1) = idx1.search(query, k);
@@ -773,7 +837,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 10,
             seed: 42,
-            multi_assign: 3, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 3,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
         let idx3 = RoutedTurboQuantIndex::build(&vectors, config3);
         let (_, ids3) = idx3.search(query, k);
@@ -786,7 +853,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 10,
             seed: 42,
-            multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
         let idx_full = RoutedTurboQuantIndex::build(&vectors, config_full);
         let (_, ids_full) = idx_full.search(query, k);
@@ -797,9 +867,12 @@ mod tests {
         let recall3 = ids3.iter().filter(|id| gt_set.contains(id)).count() as f64 / k as f64;
 
         // M=3 should have >= recall of M=1 (more vectors in probed partitions)
-        assert!(recall3 >= recall1,
-                "multi_assign=3 recall ({}) should be >= multi_assign=1 recall ({})",
-                recall3, recall1);
+        assert!(
+            recall3 >= recall1,
+            "multi_assign=3 recall ({}) should be >= multi_assign=1 recall ({})",
+            recall3,
+            recall1
+        );
     }
 
     #[test]
@@ -818,7 +891,10 @@ mod tests {
             bit_width: 4,
             kmeans_iter: 5,
             seed: 42,
-            multi_assign: 3, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            multi_assign: 3,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let index = RoutedTurboQuantIndex::build(&vectors, config);
@@ -827,7 +903,11 @@ mod tests {
 
         // No duplicates
         let unique: std::collections::HashSet<usize> = indices.iter().copied().collect();
-        assert_eq!(unique.len(), indices.len(), "search results contain duplicates");
+        assert_eq!(
+            unique.len(),
+            indices.len(),
+            "search results contain duplicates"
+        );
     }
 
     #[test]
@@ -849,7 +929,8 @@ mod tests {
             seed: 42,
             multi_assign: 1,
             boundary_threshold: None,
-            max_assign: 4, rerank_top: 0,
+            max_assign: 4,
+            rerank_top: 0,
         };
         let idx1 = RoutedTurboQuantIndex::build(&vectors, config1);
 
@@ -863,7 +944,8 @@ mod tests {
             seed: 42,
             multi_assign: 4,
             boundary_threshold: None,
-            max_assign: 4, rerank_top: 0,
+            max_assign: 4,
+            rerank_top: 0,
         };
         let idx4 = RoutedTurboQuantIndex::build(&vectors, config4);
 
@@ -877,7 +959,8 @@ mod tests {
             seed: 42,
             multi_assign: 1, // ignored in boundary mode
             boundary_threshold: Some(0.03),
-            max_assign: 4, rerank_top: 0,
+            max_assign: 4,
+            rerank_top: 0,
         };
         let idx_ba = RoutedTurboQuantIndex::build(&vectors, config_ba);
 
@@ -886,9 +969,25 @@ mod tests {
         let sf4 = idx4.storage_factor();
         let sf_ba = idx_ba.storage_factor();
 
-        assert!((sf1 - 1.0).abs() < 0.01, "M=1 should have storage_factor ~1.0, got {}", sf1);
-        assert!((sf4 - 4.0).abs() < 0.01, "M=4 should have storage_factor ~4.0, got {}", sf4);
-        assert!(sf_ba > 1.0, "boundary-aware should store more than M=1, got {}", sf_ba);
-        assert!(sf_ba < 4.0, "boundary-aware should store less than M=4, got {}", sf_ba);
+        assert!(
+            (sf1 - 1.0).abs() < 0.01,
+            "M=1 should have storage_factor ~1.0, got {}",
+            sf1
+        );
+        assert!(
+            (sf4 - 4.0).abs() < 0.01,
+            "M=4 should have storage_factor ~4.0, got {}",
+            sf4
+        );
+        assert!(
+            sf_ba > 1.0,
+            "boundary-aware should store more than M=1, got {}",
+            sf_ba
+        );
+        assert!(
+            sf_ba < 4.0,
+            "boundary-aware should store less than M=4, got {}",
+            sf_ba
+        );
     }
 }

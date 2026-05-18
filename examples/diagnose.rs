@@ -7,12 +7,12 @@
 
 extern crate blas_src;
 
-use std::collections::HashSet;
-use std::time::Instant;
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use turbovec::TurboQuantIndex;
 use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
+use std::collections::HashSet;
+use std::time::Instant;
+use turbovec::TurboQuantIndex;
 
 fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
     let mut rng = StdRng::seed_from_u64(seed);
@@ -21,7 +21,11 @@ fn random_vectors(n: usize, dim: usize, seed: u64) -> Vec<f32> {
         for d in 0..dim {
             vecs[i * dim + d] = rand::Rng::gen_range(&mut rng, -1.0..1.0);
         }
-        let norm: f32 = vecs[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum::<f32>().sqrt();
+        let norm: f32 = vecs[i * dim..(i + 1) * dim]
+            .iter()
+            .map(|x| x * x)
+            .sum::<f32>()
+            .sqrt();
         for d in 0..dim {
             vecs[i * dim + d] /= norm;
         }
@@ -47,7 +51,11 @@ fn exact_topk(vectors: &[f32], query: &[f32], dim: usize, k: usize) -> Vec<usize
 fn turbovec_flat_topk(index: &TurboQuantIndex, query: &[f32], k: usize) -> Vec<usize> {
     let results = index.search(query, k);
     let indices = results.indices_for_query(0);
-    indices.iter().filter(|&&x| x >= 0).map(|&x| x as usize).collect()
+    indices
+        .iter()
+        .filter(|&&x| x >= 0)
+        .map(|&x| x as usize)
+        .collect()
 }
 
 /// Compute recall between two sets.
@@ -95,7 +103,10 @@ fn main() {
     // TEST 1: Full-probe correctness check
     // =========================================================
     println!("\n=== TEST 1: Full-probe (R=P) correctness ===");
-    println!("{:<12} {:<12} {:<18} {:<18}", "P", "R=P", "recall vs exact", "recall vs tv_flat");
+    println!(
+        "{:<12} {:<12} {:<18} {:<18}",
+        "P", "R=P", "recall vs exact", "recall vs tv_flat"
+    );
 
     for &p in &[8, 16, 32, 64] {
         let config = RoutedTQConfig {
@@ -104,7 +115,11 @@ fn main() {
             n_probe: p, // FULL PROBE
             bit_width: 4,
             kmeans_iter: 10,
-            seed: 42, multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            seed: 42,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let routed_idx = RoutedTurboQuantIndex::build(&vectors, config);
@@ -127,7 +142,10 @@ fn main() {
     // TEST 2: Partition Hit@10
     // =========================================================
     println!("\n=== TEST 2: Partition Hit@10 (are true neighbors in routed partitions?) ===");
-    println!("{:<8} {:<8} {:<10} {:<15} {:<15}", "P", "R", "Scan%", "PartHit@10", "Final Recall");
+    println!(
+        "{:<8} {:<8} {:<10} {:<15} {:<15}",
+        "P", "R", "Scan%", "PartHit@10", "Final Recall"
+    );
 
     for &p in &[32, 64] {
         // Build index to get partition assignments
@@ -162,7 +180,11 @@ fn main() {
                 n_probe: r,
                 bit_width: 4,
                 kmeans_iter: 10,
-                seed: 42, multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+                seed: 42,
+                multi_assign: 1,
+                boundary_threshold: None,
+                max_assign: 4,
+                rerank_top: 0,
             };
             let routed_r = RoutedTurboQuantIndex::build(&vectors, config_r);
 
@@ -185,7 +207,8 @@ fn main() {
                     })
                     .collect();
                 centroid_scores.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
-                let selected_partitions: HashSet<u32> = centroid_scores.iter()
+                let selected_partitions: HashSet<u32> = centroid_scores
+                    .iter()
                     .take(r)
                     .map(|(_, pid)| *pid as u32)
                     .collect();
@@ -209,7 +232,10 @@ fn main() {
             let avg_recall = recall_sum / nq as f64;
             let scan_pct = (r as f64 / p as f64) * 100.0;
 
-            println!("{:<8} {:<8} {:<10.1} {:<15.3} {:<15.3}", p, r, scan_pct, avg_part_hit, avg_recall);
+            println!(
+                "{:<8} {:<8} {:<10.1} {:<15.3} {:<15.3}",
+                p, r, scan_pct, avg_part_hit, avg_recall
+            );
         }
     }
 
@@ -217,7 +243,10 @@ fn main() {
     // TEST 3: Recall curve for P=32
     // =========================================================
     println!("\n=== TEST 3: Recall curve P=32 ===");
-    println!("{:<8} {:<10} {:<18} {:<18} {:<12}", "R", "Scan%", "recall vs exact", "recall vs tv_flat", "latency_ms");
+    println!(
+        "{:<8} {:<10} {:<18} {:<18} {:<12}",
+        "R", "Scan%", "recall vs exact", "recall vs tv_flat", "latency_ms"
+    );
 
     for &r in &[1, 2, 4, 8, 16, 32] {
         let config = RoutedTQConfig {
@@ -226,7 +255,11 @@ fn main() {
             n_probe: r,
             bit_width: 4,
             kmeans_iter: 10,
-            seed: 42, multi_assign: 1, boundary_threshold: None, max_assign: 4, rerank_top: 0,
+            seed: 42,
+            multi_assign: 1,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: 0,
         };
 
         let routed_idx = RoutedTurboQuantIndex::build(&vectors, config);
@@ -247,6 +280,9 @@ fn main() {
         let r_tv = recall_vs_tv_sum / nq as f64;
         let scan_pct = (r as f64 / 32.0) * 100.0;
 
-        println!("{:<8} {:<10.1} {:<18.3} {:<18.3} {:<12.3}", r, scan_pct, r_exact, r_tv, latency_ms);
+        println!(
+            "{:<8} {:<10.1} {:<18.3} {:<18.3} {:<12.3}",
+            r, scan_pct, r_exact, r_tv, latency_ms
+        );
     }
 }

@@ -2,9 +2,9 @@
 //!
 //! Operates on unit-normalized vectors using inner product as similarity.
 
+use rand::distributions::{Distribution, WeightedIndex};
 use rand::rngs::StdRng;
 use rand::SeedableRng;
-use rand::distributions::{Distribution, WeightedIndex};
 
 /// K-means result: centroids and per-vector partition assignments.
 pub struct KMeansResult {
@@ -43,7 +43,8 @@ pub fn kmeans_float(
         let mut probs: Vec<f64> = Vec::with_capacity(n);
         for i in 0..n {
             let v = &vectors[i * dim..(i + 1) * dim];
-            let max_sim = centroids.iter()
+            let max_sim = centroids
+                .iter()
                 .map(|c| dot(v, c))
                 .fold(f32::NEG_INFINITY, f32::max);
             // Probability proportional to (1 - max_sim), clamped >= 0
@@ -158,7 +159,11 @@ mod tests {
                 };
             }
             // Normalize
-            let norm: f32 = vectors[i * dim..(i + 1) * dim].iter().map(|x| x * x).sum::<f32>().sqrt();
+            let norm: f32 = vectors[i * dim..(i + 1) * dim]
+                .iter()
+                .map(|x| x * x)
+                .sum::<f32>()
+                .sqrt();
             for d in 0..dim {
                 vectors[i * dim + d] /= norm;
             }

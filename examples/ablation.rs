@@ -10,12 +10,12 @@
 
 extern crate blas_src;
 
+use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
 use std::collections::HashSet;
-use std::time::Instant;
 use std::fs::File;
 use std::io::Read;
+use std::time::Instant;
 use turbovec::TurboQuantIndex;
-use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
 
 fn load_npy(path: &str) -> (Vec<f32>, usize, usize) {
     let mut file = File::open(path).expect("cannot open npy file");
@@ -26,12 +26,16 @@ fn load_npy(path: &str) -> (Vec<f32>, usize, usize) {
     let header = std::str::from_utf8(&buf[10..10 + header_len]).unwrap();
     let shape_start = header.find("'shape': (").unwrap() + 10;
     let shape_end = header[shape_start..].find(')').unwrap() + shape_start;
-    let dims: Vec<usize> = header[shape_start..shape_end].split(',')
-        .map(|s| s.trim().parse::<usize>().unwrap()).collect();
+    let dims: Vec<usize> = header[shape_start..shape_end]
+        .split(',')
+        .map(|s| s.trim().parse::<usize>().unwrap())
+        .collect();
     let (n, dim) = (dims[0], dims[1]);
     let data_start = 10 + header_len;
-    let floats: Vec<f32> = buf[data_start..].chunks_exact(4)
-        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]])).collect();
+    let floats: Vec<f32> = buf[data_start..]
+        .chunks_exact(4)
+        .map(|c| f32::from_le_bytes([c[0], c[1], c[2], c[3]]))
+        .collect();
     assert_eq!(floats.len(), n * dim);
     (floats, n, dim)
 }
@@ -41,8 +45,12 @@ fn exact_topk(vectors: &[f32], query: &[f32], dim: usize, k: usize) -> Vec<usize
     let mut scores: Vec<(f32, usize)> = (0..n)
         .map(|i| {
             let v = &vectors[i * dim..(i + 1) * dim];
-            (v.iter().zip(query.iter()).map(|(a, b)| a * b).sum::<f32>(), i)
-        }).collect();
+            (
+                v.iter().zip(query.iter()).map(|(a, b)| a * b).sum::<f32>(),
+                i,
+            )
+        })
+        .collect();
     scores.sort_unstable_by(|a, b| b.0.partial_cmp(&a.0).unwrap());
     scores.iter().take(k).map(|(_, i)| *i).collect()
 }
@@ -95,43 +103,59 @@ fn main() {
     let flat_results = flat_idx.search(queries, k);
     let mut flat_recall_sum = 0.0;
     for i in 0..nq {
-        let pred: Vec<usize> = flat_results.indices_for_query(i)
-            .iter().filter(|&&x| x >= 0).map(|&x| x as usize).collect();
+        let pred: Vec<usize> = flat_results
+            .indices_for_query(i)
+            .iter()
+            .filter(|&&x| x >= 0)
+            .map(|&x| x as usize)
+            .collect();
         flat_recall_sum += recall_score(&pred, &exact_gt[i], k);
     }
     let flat_recall = flat_recall_sum / nq as f64;
 
-    println!("\n{:<45} {:<10} {:<10} {:<10} {:<10} {:<10}",
-             "Method", "Recall", "Mean ms", "p50 ms", "p95 ms", "Build s");
+    println!(
+        "\n{:<45} {:<10} {:<10} {:<10} {:<10} {:<10}",
+        "Method", "Recall", "Mean ms", "p50 ms", "p95 ms", "Build s"
+    );
     println!("{}", "-".repeat(95));
 
-    println!("{:<45} {:<10.3} {:<10.3} {:<10.3} {:<10} {:<10}",
-             "turbovec flat (no routing, no rerank)",
-             flat_recall,
-             flat_latencies.iter().sum::<f64>() / flat_latencies.len() as f64,
-             flat_latencies[flat_latencies.len() / 2],
-             "-", "0");
+    println!(
+        "{:<45} {:<10.3} {:<10.3} {:<10.3} {:<10} {:<10}",
+        "turbovec flat (no routing, no rerank)",
+        flat_recall,
+        flat_latencies.iter().sum::<f64>() / flat_latencies.len() as f64,
+        flat_latencies[flat_latencies.len() / 2],
+        "-",
+        "0"
+    );
 
     // --- Ablation configs ---
     let ablation_configs: Vec<(usize, usize, usize, &str)> = vec![
         // (M, R, rerank, label)
-        (1, 16, 0,  "M=1 R=16 no-rerank (routing only)"),
+        (1, 16, 0, "M=1 R=16 no-rerank (routing only)"),
         (1, 16, 25, "M=1 R=16 rerank=25 (routing + rerank)"),
-        (1, 32, 0,  "M=1 R=32 no-rerank (more routing)"),
+        (1, 32, 0, "M=1 R=32 no-rerank (more routing)"),
         (1, 32, 25, "M=1 R=32 rerank=25"),
-        (2, 16, 0,  "M=2 R=16 no-rerank (multi-assign)"),
+        (2, 16, 0, "M=2 R=16 no-rerank (multi-assign)"),
         (2, 16, 25, "M=2 R=16 rerank=25 (multi-assign + rerank)"),
-        (2, 32, 0,  "M=2 R=32 no-rerank"),
+        (2, 32, 0, "M=2 R=32 no-rerank"),
         (2, 32, 25, "M=2 R=32 rerank=25 (best config)"),
-        (4, 16, 0,  "M=4 R=16 no-rerank"),
+        (4, 16, 0, "M=4 R=16 no-rerank"),
         (4, 16, 25, "M=4 R=16 rerank=25"),
     ];
 
     for (m, r, rerank, label) in &ablation_configs {
         let config = RoutedTQConfig {
-            dim, n_partitions: p, n_probe: *r, bit_width: 4,
-            kmeans_iter: 10, seed: 42, multi_assign: *m,
-            boundary_threshold: None, max_assign: 4, rerank_top: *rerank,
+            dim,
+            n_partitions: p,
+            n_probe: *r,
+            bit_width: 4,
+            kmeans_iter: 10,
+            seed: 42,
+            multi_assign: *m,
+            boundary_threshold: None,
+            max_assign: 4,
+            rerank_top: *rerank,
         };
 
         let build_start = Instant::now();
@@ -158,18 +182,33 @@ fn main() {
         let p95 = latencies[(nq as f64 * 0.95) as usize];
         let avg_recall = recall_sum / nq as f64;
 
-        println!("{:<45} {:<10.3} {:<10.3} {:<10.3} {:<10.3} {:<10.0}",
-                 label, avg_recall, mean, p50, p95, build_s);
+        println!(
+            "{:<45} {:<10.3} {:<10.3} {:<10.3} {:<10.3} {:<10.0}",
+            label, avg_recall, mean, p50, p95, build_s
+        );
     }
 
     // --- Summary ---
     println!("\n=== Component Contribution ===");
     println!("{:<35} {:<15}", "Component", "Recall Gain");
     println!("{}", "-".repeat(50));
-    println!("{:<35} {:<15}", "Baseline (flat TQ)", format!("{:.3}", flat_recall));
-    println!("{:<35} {:<15}", "+ Routing (M=1 R=32)", "+routing only (see table)");
-    println!("{:<35} {:<15}", "+ Multi-assign (M=2 R=32)", "+multi-assign (see table)");
-    println!("{:<35} {:<15}", "+ Float rerank (rr=25)", "+rerank (see table)");
+    println!(
+        "{:<35} {:<15}",
+        "Baseline (flat TQ)",
+        format!("{:.3}", flat_recall)
+    );
+    println!(
+        "{:<35} {:<15}",
+        "+ Routing (M=1 R=32)", "+routing only (see table)"
+    );
+    println!(
+        "{:<35} {:<15}",
+        "+ Multi-assign (M=2 R=32)", "+multi-assign (see table)"
+    );
+    println!(
+        "{:<35} {:<15}",
+        "+ Float rerank (rr=25)", "+rerank (see table)"
+    );
     println!("\nEach component adds recall independently.");
     println!("Reranking is the largest single contributor.");
 }

@@ -5,8 +5,8 @@
 
 extern crate blas_src;
 
-pub mod kmeans;
 pub mod index;
+pub mod kmeans;
 
 pub use index::RoutedTurboQuantIndex;
 pub use index::SearchStats;
