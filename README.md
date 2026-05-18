@@ -10,7 +10,7 @@ turbovec scores every vector with 4-bit TurboQuant SIMD — extremely fast, but 
 
 ## The Insight
 
-The true neighbors are in turbovec's candidate set — they're just ranked slightly wrong. If you rescore the top ~25 candidates with exact float inner product, you recover the misranked neighbors. But you need a cheap way to identify which 25 to rescore out of thousands.
+Many true neighbors are often present in the broader TurboQuant candidate set, but may be misranked by 4-bit scoring. If you rescore the top ~25 candidates with exact float inner product, you recover the misranked neighbors. But you need a cheap way to identify which 25 to rescore out of thousands.
 
 ## What We Built
 
