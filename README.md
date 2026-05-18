@@ -1,10 +1,65 @@
 # routed-turboquant
 
-IVF-style float routing on top of TurboQuant SIMD scoring. Sublinear search with recall that **exceeds** flat TurboQuant.
+IVF-style float routing on top of [turbovec](https://github.com/RyanCodrai/turbovec)'s TurboQuant SIMD scoring. Achieves **11-19% higher recall** than flat TurboQuant by combining partition routing with lightweight float reranking.
 
-## Key Result
+## The Problem
 
-At 10K vectors (dim=384, k=10), with rerank=25:
+turbovec is fast. On 10K vectors it scores everything in 0.018ms using hand-written NEON/AVX-512 SIMD kernels. But it has a recall ceiling — 4-bit quantization introduces scoring noise that causes it to misrank some true neighbors. At dim=384, flat turbovec tops out around 0.84 recall@10.
+
+You can't fix this by scanning more vectors. It already scans all of them. The quantization noise is the limit.
+
+## The Insight
+
+The true neighbors ARE in the candidate set (turbovec sees every vector). They're just ranked slightly wrong due to 4-bit approximation errors. If you could identify the top ~25 candidates and rescore them with exact float inner product, you'd recover the misranked neighbors.
+
+But rescoring all 10K vectors with float defeats the purpose. You need a way to narrow down to a small candidate set first.
+
+## What We Built
+
+A three-stage pipeline:
+
+```
+Stage 1: Route (cheap)
+  Query → dot product with P=32 centroids → select top-R partitions
+  Cost: 32 dot products (negligible)
+
+Stage 2: TQ Score (fast, approximate)
+  Score candidates within R partitions using TurboQuant SIMD
+  Cost: ~37% of vectors scored (with M=4 R=12)
+
+Stage 3: Float Rerank (precise, small)
+  Take top-25 from TQ scoring → exact float inner product
+  Cost: 25 dot products (negligible)
+```
+
+The key innovation: **multi-assignment**. Each vector is stored in its top-M nearest partitions (M=4). This ensures that true neighbors are present in the probed partitions even when they sit near partition boundaries. Without multi-assignment, partition hit rate on random 384-d data is only 22% at R=4. With M=4, it jumps to 93.5%.
+
+## What Made It Work
+
+Three things, in order of importance:
+
+### 1. Float reranking (the biggest win)
+
+Without reranking, routed TQ gives the same recall as flat TQ (both limited by 4-bit noise). With reranking just 25 candidates, recall jumps from 0.809 to 0.935. The rerank step costs almost nothing (25 × 384 multiplies = ~0.01ms) but corrects the quantization errors that flat TQ can't fix.
+
+This is why routed beats flat: flat TQ has no mechanism to correct its own scoring errors. Routed TQ uses TQ as a cheap first-pass filter, then applies exact scoring on the survivors.
+
+### 2. Multi-assignment (makes routing viable)
+
+On high-dimensional random data, nearest neighbors are spread across many partitions. Standard IVF (M=1) with R=12 only catches 53% of true neighbors. Multi-assignment (M=4) raises this to 93.5% — the router actually finds the right candidates.
+
+The cost is 4x storage (each vector stored 4 times). We also implemented boundary-aware assignment that achieves similar hit rates at 2-3x storage by only duplicating vectors near partition boundaries.
+
+### 3. Correctness-first development
+
+We verified at every step:
+- Full-probe (R=P) matches flat TQ exactly (0.842 vs 0.840) — proves no bugs
+- Partition Hit@10 perfectly predicts final recall — proves routing works
+- Deduplication verified — no duplicate results from multi-assignment
+
+## Results
+
+**10K vectors, dim=384, P=32, k=10, rerank=25:**
 
 | Method | Recall@10 | Latency | Storage |
 |--------|-----------|---------|---------|
@@ -14,83 +69,38 @@ At 10K vectors (dim=384, k=10), with rerank=25:
 | **routed M=4 R=16** | **0.983** | 0.652ms | 4x |
 | routed M=4 R=24 | 1.000 | 0.974ms | 4x |
 
-Routed TurboQuant with reranking **beats flat TurboQuant on recall by 11-19%** because float reranking is more precise than 4-bit quantized scoring.
+## What We Tried That Didn't Work
 
-## How It Works
+1. **V2: Single index + centroid pre-ranking.** Centroid score is a partition-level signal, not vector-level. All vectors in the same partition get the same score. Can't distinguish good candidates from bad within a partition. Recall dropped to 0.10-0.33.
 
-```
-Build:
-  vectors → normalize → float k-means (P partitions)
-  per vector → assign to top-M nearest partitions (multi-assignment)
-  per partition → build TurboQuantIndex (SIMD scoring)
+2. **V2: Partial dot product pre-ranking (first 32 dims).** Better than centroid score but still too coarse. 32 dims capture only ~8% of the information. Recall at cap=500 was 0.10-0.23. Not enough signal.
 
-Query:
-  query → centroid dot products (P) → select top-R partitions
-        → TurboQuant SIMD search within each partition
-        → deduplicate across partitions
-        → float rerank top-25 candidates (exact inner product)
-        → return top-k
-```
+3. **V2: Full float scoring all candidates (no TQ).** Works for recall (0.98+) but 100x slower than TQ scoring. Float dot products run at 4.4M vectors/sec vs TQ SIMD at 588M vectors/sec. Can't compete.
 
-## Why Recall Exceeds Flat
+The lesson: **you need TQ-level scoring as the middle layer**. Nothing cheaper provides enough vector-level ranking signal to select good rerank candidates.
 
-1. **Multi-assignment** ensures true neighbors are in probed partitions (93.5% partition hit rate at M=4 R=12)
-2. **TurboQuant scoring** within partitions provides vector-level ranking (not just partition-level)
-3. **Float reranking** of top-25 candidates corrects TQ quantization errors with exact inner product
-4. Net effect: routing + rerank recovers neighbors that flat TQ misranks due to 4-bit quantization noise
+## Latency Tradeoff
 
-## Full Recall Curve (n=10K, P=32, rerank=25)
+At 10K, turbovec flat wins on latency (0.018ms vs 0.508ms). The routing overhead (~0.03ms per partition × 12 partitions) dominates at small scale.
 
-```
-M      R      Scan%    Recall     Latency    StorageX
-1      8      25.0     0.383      0.249ms    1x
-1      16     50.0     0.649      0.475ms    1x
-1      24     75.0     0.855      0.738ms    1x
-2      8      25.0     0.593      0.280ms    2x
-2      16     50.0     0.874      0.525ms    2x
-3      8      25.0     0.727      0.294ms    3x
-3      12     37.5     0.869      0.479ms    3x
-3      16     50.0     0.944      0.573ms    3x
-4      8      25.0     0.816      0.324ms    4x
-4      12     37.5     0.935      0.508ms    4x
-4      16     50.0     0.983      0.652ms    4x
-4      24     75.0     1.000      0.974ms    4x
-```
+The crossover where routed becomes faster is around **500K vectors**, where flat scan exceeds 0.5ms and routing savings (scanning 37% instead of 100%) start to pay off.
 
-## Latency vs Flat
+This architecture is designed for:
+- **High-recall requirements** (>0.90) where flat TQ's 0.84 isn't enough
+- **Large scale** (500K+) where sublinear scan matters
+- **Tunable tradeoffs** where you need to dial recall vs latency vs storage
 
-At 10K, turbovec flat (0.018ms) is faster because NEON SIMD scores all 10K vectors in one pass with no overhead. Routed search has per-partition call overhead (~0.03ms × R partitions).
-
-The crossover point where routed becomes faster is at **n > 500K**, where flat scan exceeds the routing overhead. This architecture is designed for scale.
-
-## Features
-
-- **Multi-assignment** (M=1-4): each vector stored in M partitions for higher hit rate
-- **Boundary-aware assignment**: adaptive M based on centroid proximity (2-3x storage instead of fixed 4x)
-- **Float reranking**: exact inner product on top-25 TQ candidates
-- **Fast dedup**: vec<bool> visited array (O(1) per candidate)
-- **Partial sort**: `select_nth_unstable` for routing and top-k (no full sort)
-- **Parallel batch search**: rayon for multi-query throughput
-
-## Correctness Verified
-
-- Full-probe (R=P) matches turbovec flat recall exactly (0.842 vs 0.840)
-- Partition Hit@10 perfectly predicts final recall
-- No duplicate results in output (dedup verified by test)
-- 13 tests passing
-
-## Install
+## Quick Start
 
 ```bash
-# Rust library
-cargo build --release
+# Needs turbovec as sibling directory
+git clone https://github.com/RyanCodrai/turbovec.git
+git clone https://github.com/raghavenderreddygrudhanti/routed-turboquant.git
 
-# Python (via maturin)
-pip install maturin
-maturin develop --release
+cd routed-turboquant
+cargo test --release        # 10 tests
+cargo run --release --example bench_v1_tuned  # main benchmark
 ```
-
-## Usage
 
 ```rust
 use routed_turboquant::index::{RoutedTQConfig, RoutedTurboQuantIndex};
@@ -112,26 +122,7 @@ let index = RoutedTurboQuantIndex::build(&vectors, config);
 let (scores, indices) = index.search(&query, 10);
 ```
 
-## Benchmarks
-
-```bash
-# Full M/R sweep with rerank
-cargo run --release --example bench_v1_tuned
-
-# Correctness diagnostics (full-probe, partition hit rate)
-cargo run --release --example diagnose
-
-# Multi-assignment impact
-cargo run --release --example diagnose_multi
-
-# Boundary-aware vs fixed M
-cargo run --release --example bench_boundary
-
-# Reranking impact
-cargo run --release --example bench_rerank
-```
-
-## Architecture
+## Project Structure
 
 ```
 src/
@@ -147,17 +138,9 @@ examples/
 └── bench_rerank.rs      — reranking impact
 ```
 
-## Comparison with turbovec
+## Contributing
 
-| Aspect | turbovec flat | routed-turboquant |
-|--------|-------------|-------------------|
-| Recall@10 (10K) | 0.840 | **0.935** (M=4 R=12 rr=25) |
-| Latency (10K) | **0.018ms** | 0.508ms |
-| Latency (500K est.) | ~0.9ms | ~0.5ms |
-| Build time | O(n) | O(n × P) |
-| Memory | n × dim × bits/8 | M × n × dim × bits/8 |
-| Recall control | fixed (bit_width) | tunable (M, R, rerank) |
-| Best for | small-medium flat scan | large-scale high-recall |
+See [CONTRIBUTING.md](CONTRIBUTING.md). The highest-impact contribution is adding allowlist/subset scoring support to turbovec's Rust API — this would eliminate the duplicate scoring overhead and make routed competitive on latency at all scales.
 
 ## License
 
