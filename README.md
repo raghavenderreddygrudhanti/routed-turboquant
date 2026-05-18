@@ -17,22 +17,24 @@ A three-stage pipeline:
 ```
 Stage 1: Route (cheap)
   Query → dot product with P centroids → select top-R partitions
-  Cost: P dot products (negligible)
+  Cost: P dot products
 
 Stage 2: TQ Score (fast, approximate)
   Score candidates within R partitions using TurboQuant SIMD
-  Cost: 25-50% of vectors scored
+  Cost: 25-50% of vectors scored (per-partition TQ overhead dominates)
 
 Stage 3: Float Rerank (precise, small)
   Take top-25 from TQ scoring → exact float inner product
-  Cost: 25 dot products (negligible)
+  Cost: 25 dot products
 ```
+
+Total routed latency is dominated by per-partition TQ search and merge overhead, not by the rerank step itself.
 
 Multi-assignment (M=2-4) stores each vector in multiple partitions to ensure true neighbors are present in the probed set.
 
 ## Results on Real Embeddings
 
-**Dataset:** 100K sentence-transformer embeddings (all-MiniLM-L6-v2, dim=384)
+**Dataset:** 100K sentence-transformer embeddings generated from `all-MiniLM-L6-v2` via the `sentence-transformers` Python library. Text source: combinatorial phrases from 40 CS topics × 27 verbs × 16 contexts. Vectors are L2-normalized. Queries: last 200 vectors from the dataset (same distribution as database). Ground truth: exact inner product over all n vectors.
 
 ### 10K vectors
 
@@ -40,8 +42,8 @@ Multi-assignment (M=2-4) stores each vector in multiple partitions to ensure tru
 |--------|-----------|---------|-------|
 | FAISS Flat (exact) | 1.000 | 0.014ms | brute force float |
 | FAISS IVF-Flat (nprobe=16) | 0.989 | 0.016ms | IVF routing + float scoring |
-| FAISS HNSW (M=32 ef=64) | 0.981 | 0.008ms | graph index |
 | **routed-turboquant M=2 R=8 rr=25** | **0.987** | 0.297ms | ours |
+| FAISS HNSW (M=32 ef=64) | 0.981 | 0.008ms | graph index |
 | turbovec flat | 0.952 | 0.016ms | 4-bit TQ flat scan |
 | FAISS IVFPQ (nprobe=16) | 0.871 | 0.012ms | IVF + product quantization |
 
@@ -67,30 +69,34 @@ Multi-assignment (M=2-4) stores each vector in multiple partitions to ensure tru
 | turbovec flat | 0.863 | 0.094ms | 4-bit TQ flat scan |
 | FAISS IVFPQ (nprobe=16) | 0.822 | 0.027ms | IVF + product quantization |
 
+### Partition Hit@10 on Real Data
+
+Measured on 99K real embeddings (P=64, rerank=25):
+
+| M | R | Scan% | PartHit@10 | Recall (no rerank) | Recall (rr=25) |
+|---|---|-------|------------|--------------------:|---------------:|
+| 1 | 16 | 25% | 0.87 | 0.863 | 0.888 |
+| 1 | 32 | 50% | 0.93 | 0.870 | 0.889 |
+| 2 | 16 | 25% | 0.95 | 0.872 | 0.892 |
+| 2 | 32 | 50% | 0.98 | 0.880 | 0.900 |
+| 4 | 16 | 25% | 0.98 | 0.876 | 0.896 |
+
+On real embeddings, M=2 already achieves 95%+ partition hit rate because semantic vectors cluster naturally. The rerank step adds +2-3% recall on top of TQ-only scoring.
+
 ### Analysis
 
 **Recall ranking:** FAISS IVF-Flat > routed-turboquant > FAISS HNSW > turbovec flat > FAISS IVFPQ
 
-**Latency ranking:** FAISS HNSW > FAISS IVFPQ > turbovec flat > FAISS Flat > FAISS IVF-Flat > routed-turboquant
+**Latency ranking:** FAISS HNSW > FAISS IVFPQ > turbovec flat > FAISS Flat ≈ FAISS IVF-Flat > routed-turboquant
 
 **Where routed-turboquant fits:**
 - Higher recall than turbovec flat (+3-9%) and FAISS HNSW at 50K+
 - Higher recall than FAISS IVFPQ (+7-20%)
 - Lower recall than FAISS IVF-Flat (which uses full float scoring, not quantized)
-- Slower than all FAISS methods at current scale (routing overhead dominates)
-- Uses 8-16x less memory than FAISS IVF-Flat (4-bit codes vs float32)
+- Slower than all FAISS methods at current scale (per-partition TQ overhead dominates)
+- Uses 8-16x less memory for compressed candidate storage than FAISS IVF-Flat, but float reranking currently requires storing original vectors, which dominates total memory
 
-**The honest positioning:** routed-turboquant occupies the space between turbovec flat (fast, moderate recall) and FAISS IVF-Flat (high recall, high memory). It achieves near-IVF-Flat recall using quantized storage, at the cost of higher latency from per-partition TQ overhead.
-
-### Random Vectors (worst case — no cluster structure)
-
-| Method | Recall@10 | Latency | Storage |
-|--------|-----------|---------|---------|
-| turbovec flat | 0.840 | 0.018ms | 1x |
-| routed M=4 R=12 rr=25 | **0.935** | 0.508ms | 4x |
-| routed M=4 R=16 rr=25 | **0.983** | 0.652ms | 4x |
-
-Even on random data with no natural clusters, routed achieves +11-17% recall.
+**The honest positioning:** routed-turboquant occupies the space between turbovec flat (fast, moderate recall) and FAISS IVF-Flat (high recall, high memory). It achieves near-IVF-Flat recall using quantized scoring, at the cost of higher latency from per-partition TQ overhead.
 
 ## Memory Breakdown
 
@@ -98,26 +104,40 @@ For n=99K, dim=384, 4-bit, M=2, P=64:
 
 | Component | Size | Notes |
 |-----------|------|-------|
-| TQ codes (per partition) | 2 × 99K × 384 × 4/8 = 38.0 MB | M=2 duplicates |
+| TQ codes (per partition) | 2 × 99K × 384 × 4/8 = 38.0 MB | M=2 duplicated codes |
 | Norms | 2 × 99K × 4 = 0.8 MB | one per stored copy |
 | Centroids | 64 × 384 × 4 = 96 KB | P float centroids |
 | Partition ID lists | 2 × 99K × 8 = 1.6 MB | global ID mappings |
 | Float vectors (rerank) | 99K × 384 × 4 = 152 MB | original vectors for rerank |
-| **Total** | **~192 MB** | dominated by float rerank storage |
+| **Total** | **~192 MB** | **dominated by float rerank storage** |
 
-Without float rerank (TQ scores only): ~40 MB. The float vectors for reranking are the largest cost. A future optimization is to store only the top-k candidates' vectors on demand rather than all vectors.
+Without float rerank (TQ scores only): ~40 MB. The float vectors for reranking are the largest memory cost. Future optimization: store float vectors on disk and load only the top-25 candidates on demand, or use a higher-bit (8-bit) intermediate representation instead of full float32.
+
+**Comparison:**
+- FAISS IVF-Flat at 99K: ~152 MB (float32 vectors only, no codes)
+- routed-turboquant without rerank: ~40 MB (4-bit codes, 4x less)
+- routed-turboquant with rerank: ~192 MB (codes + float vectors)
+
+The memory advantage over FAISS IVF-Flat applies only when reranking is disabled or float vectors are stored externally.
 
 ## Latency Analysis
 
+### Measured results
+
 | Scale | turbovec flat | routed (best) | Overhead source |
 |-------|--------------|---------------|-----------------|
-| 10K | 0.016ms | 0.297ms | per-partition TQ call overhead (0.03ms × 8) |
-| 50K | 0.051ms | 0.792ms | per-partition TQ call overhead (0.03ms × 16) |
-| 99K | 0.094ms | 1.453ms | per-partition TQ call overhead (0.03ms × 16) |
-| 500K (est.) | ~0.5ms | ~0.5ms | **projected crossover** |
-| 1M (est.) | ~1.0ms | ~0.6ms | routed projected faster |
+| 10K | 0.016ms | 0.297ms | per-partition TQ call (0.03ms × 8 partitions) |
+| 50K | 0.051ms | 0.792ms | per-partition TQ call (0.03ms × 16 partitions) |
+| 99K | 0.094ms | 1.453ms | per-partition TQ call (0.03ms × 16 partitions) |
 
-The per-partition TQ `search()` call has ~0.03ms fixed overhead (rotation matrix lookup, blocked cache access). This dominates at small scale. We expect the latency crossover to appear around 500K+ where flat scan time exceeds routing overhead, but this has not been validated with a full benchmark yet.
+### Projected (not yet measured)
+
+| Scale | turbovec flat (est.) | routed (est.) | Notes |
+|-------|---------------------|---------------|-------|
+| 500K | ~0.5ms | ~0.5ms | projected crossover |
+| 1M | ~1.0ms | ~0.6ms | routed projected faster |
+
+These projections assume flat TQ scales linearly (confirmed at 10K-99K) and routed overhead stays constant. **This has not been validated.** Full 500K/1M benchmarks are pending due to build time (~10 min at 500K with M=4 P=128).
 
 ## How It Differs from turbovec
 
@@ -128,7 +148,7 @@ The per-partition TQ `search()` call has ~0.03ms fixed overhead (rotation matrix
 | **Recall ceiling** | Limited by quantization noise | Breaks through via float rerank |
 | **Speed < 100K** | Faster (no routing overhead) | Slower (per-partition overhead) |
 | **Speed > 500K** | Slower (linear scan) | Potentially faster (sublinear, not yet proven) |
-| **Memory** | 1x (codes + norms) | 2-4x codes + float vectors |
+| **Memory** | 1x (codes + norms) | 2-4x codes + float vectors for rerank |
 | **Build** | O(n) instant | O(n × P) k-means |
 | **Tuning** | bit_width only | M, R, P, rerank (full control) |
 | **Use case** | Low-latency, moderate recall | High-recall, tunable |
@@ -139,13 +159,13 @@ The per-partition TQ `search()` call has ~0.03ms fixed overhead (rotation matrix
 
 **How routed-turboquant breaks through:**
 
-TQ scoring is used as a cheap filter, not the final answer. The top-25 TQ candidates are rescored with exact float inner product. This corrects ~95% of TQ misrankings at negligible cost (25 dot products).
+TQ scoring is used as a cheap filter, not the final answer. The top-25 TQ candidates are rescored with exact float inner product. This corrects ~95% of TQ misrankings. The total pipeline latency is dominated by per-partition TQ overhead, not the rerank step.
 
 ## What Made It Work
 
 1. **Float reranking** — the single biggest win. Without it, routed recall equals flat recall. With rerank=25, recall jumps +10-15%.
 
-2. **Multi-assignment** — stores each vector in M nearest partitions. Raises partition hit rate from 22% (M=1) to 93.5% (M=4) on random data. On real embeddings, even M=2 achieves >95% hit rate.
+2. **Multi-assignment** — stores each vector in M nearest partitions. Raises partition hit rate from 22% (M=1) to 93.5% (M=4) on random data. On real embeddings, even M=2 achieves 95%+ hit rate due to natural cluster structure.
 
 3. **Correctness verification** — full-probe (R=P) matches flat exactly, proving no bugs. Partition Hit@10 perfectly predicts final recall.
 
@@ -161,13 +181,14 @@ Lesson: **TQ-level scoring is the necessary middle layer.** Nothing cheaper prov
 
 ## Limitations
 
-1. **Slower than flat turbovec below ~500K vectors.** Per-partition TQ call overhead (~0.03ms each) dominates at small scale.
-2. **Multi-assignment increases storage 2-4x.** Each vector stored in M partitions.
-3. **Float rerank requires original vectors in memory** (~152 MB at 99K). Dominates memory at scale.
+1. **Slower than flat turbovec and FAISS below ~500K vectors.** Per-partition TQ call overhead (~0.03ms each) dominates at small scale.
+2. **Multi-assignment increases TQ code storage 2-4x.** Each vector stored in M partitions.
+3. **Float rerank requires original vectors in memory** (~152 MB at 99K). This dominates total memory and negates the compression advantage at current scale.
 4. **Build time is high.** O(n × P) for k-means + multi-assignment. ~80s at 99K with P=64.
 5. **Depends on turbovec as sibling directory.** Not published to crates.io independently.
 6. **No streaming insert/delete.** Index must be rebuilt to add vectors.
 7. **500K+ latency crossover not yet benchmarked.** Projected from linear scaling, not measured. The claim that routed becomes faster at large scale is a hypothesis.
+8. **Lower recall than FAISS IVF-Flat.** IVF-Flat uses exact float scoring within partitions (no quantization loss). Our TQ scoring introduces noise that reranking only partially corrects.
 
 ## Quick Start
 
@@ -232,43 +253,35 @@ examples/
 ├── diagnose_multi.rs    — multi-assignment impact
 ├── bench_boundary.rs    — boundary-aware assignment
 └── bench_rerank.rs      — reranking impact
+
+benchmarks/
+└── faiss_baselines.py   — FAISS comparison (Flat, HNSW, IVF-Flat, IVFPQ)
 ```
 
 ## Benchmarking
 
-```bash
-# Random data: full M/R sweep at 10K
-cargo run --release --example bench_v1_tuned
-
-# Real embeddings: 10K + 50K (needs ../data/minilm_100k.npy)
-cargo run --release --example bench_real_data
-
-# Real embeddings: 99K only
-cargo run --release --example bench_real_99k
-
-# Correctness: full-probe = flat, partition hit rate
-cargo run --release --example diagnose
-
-# Reranking impact: recall with/without rerank at various budgets
-cargo run --release --example bench_rerank
-```
+See [BENCHMARKS.md](BENCHMARKS.md) for full details.
 
 **Environment used for published results:**
 - CPU: Apple M3 Max (12 cores)
 - RAM: 36 GB
-- OS: macOS
+- OS: macOS 15.x
 - Rust: 1.95.0
-- turbovec: v0.2.0 (local, commit from RyanCodrai/turbovec main)
-- Dataset: 100K embeddings from `all-MiniLM-L6-v2` via sentence-transformers
+- turbovec: v0.2.0 (local, RyanCodrai/turbovec main branch)
+- FAISS: 1.13.2 (via faiss-cpu pip package)
+- Dataset: 100K embeddings from `all-MiniLM-L6-v2` (sentence-transformers)
+- Queries: last 200 vectors from dataset (same distribution)
+- Ground truth: exact inner product (FAISS IndexFlatIP)
+- Timing: single-threaded, warmup 5 queries, mean of 200 queries
 
 ## Contributing
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Highest-impact areas:
 
-1. **TQ subset scoring** — add allowlist support to turbovec Rust API (eliminates duplicate scoring)
+1. **TQ subset scoring** — add allowlist support to turbovec Rust API (eliminates duplicate scoring, biggest latency win)
 2. **500K+ benchmark** — validate the crossover point with real data
-3. **FAISS baselines** — add IVF-Flat, HNSW, IVFPQ comparisons
-4. **Streaming insert** — support adding vectors without full rebuild
+3. **Streaming insert** — support adding vectors without full rebuild
+4. **Disk-based rerank** — load float vectors from disk instead of RAM
 
 ## License
 
