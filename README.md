@@ -162,9 +162,31 @@ TQ scoring is used as a cheap filter, not the final answer. The top-25 TQ candid
 
 ## What Made It Work
 
-1. **Float reranking** — the single biggest win. Without it, routed recall equals flat recall. With rerank=25, recall jumps +10-15%.
+### Ablation Study (99K real embeddings, P=64)
 
-2. **Multi-assignment** — stores each vector in M nearest partitions. Raises partition hit rate from 22% (M=1) to 93.5% (M=4) on random data. On real embeddings, even M=2 achieves 95%+ hit rate due to natural cluster structure.
+| Method | Routing | Multi-assign | Rerank | Recall@10 | Mean ms | p50 ms |
+|--------|---------|-------------|--------|-----------|---------|--------|
+| turbovec flat | — | — | — | 0.863 | 0.085 | 0.083 |
+| routed M=1 R=16 | Yes | M=1 | No | 0.857 | 0.635 | 0.616 |
+| routed M=1 R=16 rr=25 | Yes | M=1 | Yes | **0.888** | 0.674 | 0.672 |
+| routed M=2 R=16 rr=25 | Yes | M=2 | Yes | **0.892** | 0.891 | 0.898 |
+| routed M=2 R=32 rr=25 | Yes | M=2 | Yes | **0.900** | 1.726 | 1.732 |
+| routed M=4 R=16 rr=25 | Yes | M=4 | Yes | **0.896** | 1.413 | 1.418 |
+
+**Component contributions (isolated):**
+
+| Component | Recall change | Notes |
+|-----------|--------------|-------|
+| Routing alone (M=1, no rerank) | -0.006 | slightly worse — partition misses without rerank |
+| + Float rerank (rr=25) | **+0.031** | 0.857 → 0.888, largest single gain |
+| + Multi-assign (M=2) | +0.004 | 0.888 → 0.892, improves partition hit rate |
+| + More probe (R=32) | +0.008 | 0.892 → 0.900, covers more partitions |
+
+**Key finding:** Routing without reranking is actually slightly worse than flat (0.857 vs 0.863) because partition misses lose some neighbors. Float reranking is what makes the entire approach work — it's the single component that breaks through the quantization ceiling.
+
+1. **Float reranking** — the single biggest win (+0.031 recall). Without it, routing hurts. With it, routing + rerank exceeds flat.
+
+2. **Multi-assignment** — small but consistent gain (+0.004). Raises partition hit rate from ~87% to ~95% on real data.
 
 3. **Correctness verification** — full-probe (R=P) matches flat exactly, proving no bugs. Partition Hit@10 perfectly predicts final recall.
 
