@@ -11,3 +11,4 @@ dist/
 build/
 .eggs/
 *.whl
+.DS_Store
